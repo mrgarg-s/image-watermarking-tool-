@@ -15,9 +15,9 @@ try:
 except ImportError:
     HAS_DND = False
 
-# Meta Encryption feature (AES)
+# Meta Encryption feature (AES-GCM)
 try:
-    from cryptography.fernet import Fernet
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     HAS_CRYPTO = True
 except ImportError:
     HAS_CRYPTO = False
@@ -44,10 +44,10 @@ SUPPORTED_FORMATS = [
     ("All Files", "*.*")
 ]
 
-class VulcanProjectApp:
+class WaterMarkProjectApp:
     def __init__(self, main_window):
         self.root = main_window
-        self.root.title("VULCAN WATERMARKING TOOL")
+        self.root.title("WATERMARKING SOFTWARE - SECURE EDITION")
         
         icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'icon.ico')
         if os.path.exists(icon_path):
@@ -305,7 +305,7 @@ class VulcanProjectApp:
         top_frame = ttk.Frame(self.tool_frame)
         top_frame.pack(fill=tk.X, side=tk.TOP)
         
-        tk.Label(top_frame, text="VULCAN WATERMARKER", font=("Arial", 16, "bold"), bg=self.panel_bg, fg=self.purple_theme).pack(pady=(0, 10), anchor=tk.W)
+        tk.Label(top_frame, text="WATERMARKER TOOL", font=("Arial", 16, "bold"), bg=self.panel_bg, fg=self.purple_theme).pack(pady=(0, 10), anchor=tk.W)
         ttk.Button(top_frame, text="Upload File (Image/PDF)", command=self.select_file).pack(fill=tk.X, pady=(0,5))
         
         ur_frame = ttk.Frame(top_frame)
@@ -1002,14 +1002,23 @@ class VulcanProjectApp:
             return filepath
         try:
             pwd_bytes = self.meta_pwd.get().encode()
-            key = base64.urlsafe_b64encode(hashlib.sha256(pwd_bytes).digest())
-            f = Fernet(key)
+            # SHA-256 generates a 32-byte key required for AES-256
+            key = hashlib.sha256(pwd_bytes).digest()
+            aesgcm = AESGCM(key)
+            
             with open(filepath, 'rb') as file:
                 original = file.read()
-            encrypted = f.encrypt(original)
+            
+            # Generate a 12-byte random nonce for AES-GCM
+            nonce = os.urandom(12)
+            encrypted = aesgcm.encrypt(nonce, original, None)
+            
+            # Prepend our custom signature and the nonce to the ciphertext
+            final_payload = b'AESGCM' + nonce + encrypted
+            
             enc_filepath = filepath + ".enc"
             with open(enc_filepath, 'wb') as file:
-                file.write(encrypted)
+                file.write(final_payload)
             os.remove(filepath) 
             return enc_filepath
         except Exception as e:
@@ -1023,12 +1032,43 @@ class VulcanProjectApp:
         if self.meta_encrypt.get() and HAS_CRYPTO and self.meta_pwd.get():
             try:
                 pwd_bytes = self.meta_pwd.get().encode()
-                key = base64.urlsafe_b64encode(hashlib.sha256(pwd_bytes).digest())
-                f = Fernet(key)
-                auth_txt = f.encrypt(auth_txt.encode()).decode()
-                copy_txt = f.encrypt(copy_txt.encode()).decode()
+                key = hashlib.sha256(pwd_bytes).digest()
+                aesgcm = AESGCM(key)
+                
+                if auth_txt:
+                    nonce1 = os.urandom(12)
+                    enc1 = aesgcm.encrypt(nonce1, auth_txt.encode(), None)
+                    auth_txt = "AESGCM" + base64.b64encode(nonce1 + enc1).decode('utf-8')
+                    
+                if copy_txt:
+                    nonce2 = os.urandom(12)
+                    enc2 = aesgcm.encrypt(nonce2, copy_txt.encode(), None)
+                    copy_txt = "AESGCM" + base64.b64encode(nonce2 + enc2).decode('utf-8')
+                    
             except Exception as e:
                 print("Encryption Error:", e)
+
+        if fmt == "Word (.docx)":
+            if not HAS_DOCX:
+                messagebox.showerror("Error", "python-docx missing. Saved as PNG instead.")
+                final_img.save(save_path.replace(".docx", ".png"), format="PNG")
+            else:
+                buf = io.BytesIO()
+                final_img.save(buf, format="PNG")
+                buf.seek(0)
+                doc = docx.Document()
+                doc.add_paragraph(f"Author: {auth_txt}\nCopyright: {copy_txt}")
+                doc.add_picture(buf, width=docx.shared.Inches(6))
+                doc.save(save_path)
+        elif fmt == "PDF Document":
+            final_img.convert("RGB").save(save_path, format="PDF", dpi=(150, 150))
+        elif fmt == "JPEG Image":
+            final_img.convert("RGB").save(save_path, format="JPEG", quality=95)
+        else:  
+            meta_info = PngImagePlugin.PngInfo()
+            meta_info.add_text("Author", auth_txt)
+            meta_info.add_text("Copyright", copy_txt)
+            final_img.save(save_path, format="PNG", pnginfo=meta_info)
 
         if fmt == "Word (.docx)":
             if not HAS_DOCX:
@@ -1145,14 +1185,14 @@ class VulcanProjectApp:
                         if mode != "RGBA":
                             p_img = p_img.convert("RGBA")
                         wm = self.render_engine(p_img, low_res_mode=False)
-                        s_path = os.path.join(o_dir, f"vulcan_{name_without_ext}_p{p_idx+1}{ext}")
+                        s_path = os.path.join(o_dir, f"WaterMark_{name_without_ext}_p{p_idx+1}{ext}")
                         self._apply_meta_and_save(wm, s_path, fmt)
                         self._encrypt_file_on_disk(s_path)
                     count += 1
                 else:
                     img = Image.open(path).convert("RGBA")
                     wm  = self.render_engine(img, low_res_mode=False)
-                    s_path = os.path.join(o_dir, f"vulcan_{name_without_ext}{ext}")
+                    s_path = os.path.join(o_dir, f"WaterMark_{name_without_ext}{ext}")
                     self._apply_meta_and_save(wm, s_path, fmt)
                     self._encrypt_file_on_disk(s_path)
                     count += 1
@@ -1231,6 +1271,6 @@ if __name__ == "__main__":
     else: 
         win = tk.Tk()
         
-    app = VulcanProjectApp(win)
+    app = WaterMarkProjectApp(win)
     win.bind("<Configure>", lambda e: app.refresh_image() if e.widget == win else None)
     win.mainloop()

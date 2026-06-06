@@ -9,7 +9,7 @@ from PIL import Image
 
 # --- Feature Flags & Imports ---
 try:
-    from cryptography.fernet import Fernet
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     HAS_CRYPTO = True
 except ImportError:
     HAS_CRYPTO = False
@@ -26,13 +26,13 @@ try:
 except ImportError:
     HAS_DOCX = False
 
-class VulcanDecrypterApp:
+class WaterMarkDecrypterApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Vulcan Meta Decrypter")
+        self.root.title("Watermark Verifier - WM SECURE EDITION")
         self.root.geometry("600x550")
         
-        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'icon1.ico')
+        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'icon-v.ico')
         if os.path.exists(icon_path):
             try:
                 self.root.iconbitmap(icon_path)
@@ -64,7 +64,7 @@ class VulcanDecrypterApp:
         style.map("TButton", background=[("active", self.accent_color)])
         
         # Header
-        header = tk.Label(self.root, text="VULCAN SECURE DECRYPTER", font=("Arial", 16, "bold"), bg=self.bg_color, fg=self.accent_color)
+        header = tk.Label(self.root, text="WM SECURE VERIFIER", font=("Arial", 16, "bold"), bg=self.bg_color, fg=self.accent_color)
         header.pack(pady=(20, 5))
         
         if HAS_DND:
@@ -153,7 +153,8 @@ class VulcanDecrypterApp:
         try:
             with open(target_path, 'rb') as f:
                 header = f.read(10)
-            if header.startswith(b'gAAAAA'):
+            # Detect both Legacy (Fernet) and Modern (AES-GCM) signatures
+            if header.startswith(b'gAAAAA') or header.startswith(b'AESGCM'):
                 is_full_encrypted = True
         except Exception:
             pass
@@ -168,13 +169,24 @@ class VulcanDecrypterApp:
                 
             try:
                 pwd_bytes = pwd.encode()
-                key = base64.urlsafe_b64encode(hashlib.sha256(pwd_bytes).digest())
-                f_crypto = Fernet(key)
+                key_gcm = hashlib.sha256(pwd_bytes).digest()
                 
                 with open(target_path, 'rb') as f:
                     encrypted_data = f.read()
-                    
-                decrypted_data = f_crypto.decrypt(encrypted_data)
+                
+                # Route based on the detected signature
+                if encrypted_data.startswith(b'AESGCM'):
+                    aesgcm = AESGCM(key_gcm)
+                    nonce = encrypted_data[6:18]
+                    ciphertext = encrypted_data[18:]
+                    decrypted_data = aesgcm.decrypt(nonce, ciphertext, None)
+                elif encrypted_data.startswith(b'gAAAAA'):
+                    from cryptography.fernet import Fernet
+                    key_fernet = base64.urlsafe_b64encode(key_gcm)
+                    f_crypto = Fernet(key_fernet)
+                    decrypted_data = f_crypto.decrypt(encrypted_data)
+                else:
+                    raise ValueError("Unknown encryption signature")
                 
                 # Setup decrypted file path
                 base_name = target_path
@@ -202,14 +214,13 @@ class VulcanDecrypterApp:
         copy_txt = ""
 
         try:
-            # 1. Handle JPEGs and PDFs (Vulcan limitation)
+            # 1. Handle JPEGs and PDFs
             if ext.endswith(('.jpg', '.jpeg', '.pdf')):
-                # Only warn if it wasn't a fully encrypted file that we just cracked open
                 if not is_full_encrypted:
-                    self.write_output("STATUS: FORMAT LIMITATION\n\nBased on the Vulcan software's export logic, hidden metadata is NOT saved into JPEG or PDF files. Vulcan only embeds secure data inside PNG files or writes it visibly into Word documents.")
+                    self.write_output("STATUS: FORMAT LIMITATION\n\nBased on the Watermark software's export logic, hidden metadata is NOT saved into JPEG or PDF files. Watermark only embeds secure data inside PNG files or writes it visibly into Word documents.")
                     return
                 else:
-                    output_text = self.txt_output.get("1.0", tk.END).strip() + "\n\nSTATUS: METADATA EXTRACTION SKIPPED\nFile is a JPEG/PDF which does not hold Vulcan metadata."
+                    output_text = self.txt_output.get("1.0", tk.END).strip() + "\n\nSTATUS: METADATA EXTRACTION SKIPPED\nFile is a JPEG/PDF which does not hold Watermark metadata."
 
             # 2. Handle Word Documents
             elif ext.endswith('.docx'):
@@ -239,9 +250,9 @@ class VulcanDecrypterApp:
 
             if not auth_txt and not copy_txt:
                 if not ext.endswith(('.jpg', '.jpeg', '.pdf')):
-                    output_text += "STATUS: No metadata found in file.\nThis file does not contain Vulcan watermark data."
+                    output_text += "STATUS: No metadata found in file.\nThis file does not contain Watermark data."
             else:
-                is_meta_encrypted = "gAAAAA" in auth_txt or "gAAAAA" in copy_txt
+                is_meta_encrypted = "gAAAAA" in auth_txt or "gAAAAA" in copy_txt or "AESGCM" in auth_txt or "AESGCM" in copy_txt
 
                 if is_meta_encrypted:
                     if not pwd:
@@ -250,18 +261,33 @@ class VulcanDecrypterApp:
                         output_text += "ERROR: cryptography library is missing. Cannot decrypt data."
                     else:
                         pwd_bytes = pwd.encode()
-                        key = base64.urlsafe_b64encode(hashlib.sha256(pwd_bytes).digest())
-                        f_crypto = Fernet(key)
+                        key_gcm = hashlib.sha256(pwd_bytes).digest()
                         
                         output_text += "STATUS: METADATA DECRYPTED SECURELY\n" + "-"*35 + "\n"
                         try:
-                            dec_auth = f_crypto.decrypt(auth_txt.encode()).decode()
+                            if auth_txt.startswith("AESGCM"):
+                                raw = base64.b64decode(auth_txt[6:].encode())
+                                dec_auth = AESGCM(key_gcm).decrypt(raw[:12], raw[12:], None).decode()
+                            elif "gAAAAA" in auth_txt:
+                                from cryptography.fernet import Fernet
+                                key_fernet = base64.urlsafe_b64encode(key_gcm)
+                                dec_auth = Fernet(key_fernet).decrypt(auth_txt.encode()).decode()
+                            else:
+                                dec_auth = auth_txt
                             output_text += f"AUTHOR    : {dec_auth}\n"
                         except:
                             output_text += "AUTHOR    : [Decryption Failed - Wrong Password?]\n"
                             
                         try:
-                            dec_copy = f_crypto.decrypt(copy_txt.encode()).decode()
+                            if copy_txt.startswith("AESGCM"):
+                                raw = base64.b64decode(copy_txt[6:].encode())
+                                dec_copy = AESGCM(key_gcm).decrypt(raw[:12], raw[12:], None).decode()
+                            elif "gAAAAA" in copy_txt:
+                                from cryptography.fernet import Fernet
+                                key_fernet = base64.urlsafe_b64encode(key_gcm)
+                                dec_copy = Fernet(key_fernet).decrypt(copy_txt.encode()).decode()
+                            else:
+                                dec_copy = copy_txt
                             output_text += f"COPYRIGHT : {dec_copy}\n"
                         except:
                             output_text += "COPYRIGHT : [Decryption Failed - Wrong Password?]\n"
@@ -278,15 +304,14 @@ class VulcanDecrypterApp:
         # --- AUTO-LAUNCH DECRYPTED FILE ---
         if is_full_encrypted:
             try:
-                if platform.system() == 'Darwin':       # macOS
+                if platform.system() == 'Darwin':       
                     subprocess.call(('open', target_path))
-                elif platform.system() == 'Windows':    # Windows
+                elif platform.system() == 'Windows':    
                     os.startfile(target_path)
-                else:                                   # Linux variants
+                else:                                   
                     subprocess.call(('xdg-open', target_path))
             except Exception as e:
                 self.write_output(self.txt_output.get("1.0", tk.END) + f"\n\n[Warning] Could not auto-launch the decrypted file in the viewer: {e}")
-
 
 if __name__ == "__main__":
     if HAS_DND:
@@ -295,5 +320,5 @@ if __name__ == "__main__":
         root = tk.Tk()
         print("Warning: tkinterdnd2 missing. Drag and drop disabled.")
         
-    app = VulcanDecrypterApp(root)
+    app = WaterMarkDecrypterApp(root)
     root.mainloop()
