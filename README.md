@@ -127,9 +127,7 @@ Supported formats:
 ## Install Required Libraries
 
 ```bash
-
 pip install pillow cryptography pymupdf python-docx tkinterdnd2
-
 ```
 
 ---
@@ -139,17 +137,13 @@ pip install pillow cryptography pymupdf python-docx tkinterdnd2
 ## Watermark Software
 
 ```bash
-
 python "Watermark software.py"
-
 ```
 
 ## Watermark Verifier
 
 ```bash
-
 python "Watermark verifier.py"
-
 ```
 
 ---
