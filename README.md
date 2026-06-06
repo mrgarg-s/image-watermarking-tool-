@@ -148,20 +148,6 @@ python "Watermark verifier.py"
 
 ---
 
-# Project Structure
-
-project/
-
-├── Watermark software.py
-├── Watermark verifier.py
-├── LICENSE.txt
-├── README.md
-├── SECURITY.md
-├── icon.ico
-└── icon-v.ico
-
----
-
 # Security
 
 The software uses:
